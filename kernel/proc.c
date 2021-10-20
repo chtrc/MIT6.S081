@@ -127,6 +127,11 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->kernelpagetable = userkernelpagetableinit();
+
+  uint64 va = KSTACK((int) (p - proc));
+  uvmmap(p->kernelpagetable, va, kvmpa(p->kstack), PGSIZE, PTE_R | PTE_W);
+
   return p;
 }
 
@@ -141,6 +146,9 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if(p->kernelpagetable)
+    freeuserkernelpagetable(p->kernelpagetable);
+  p->kernelpagetable = 0;
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -446,6 +454,8 @@ wait(uint64 addr)
   }
 }
 
+extern pagetable_t kernel_pagetable;
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -473,10 +483,17 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        w_satp(MAKE_SATP(p->kernelpagetable));
+        sfence_vma();
+
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+
+        w_satp(MAKE_SATP(kernel_pagetable));
+        sfence_vma();
+
         c->proc = 0;
 
         found = 1;
